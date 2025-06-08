@@ -1,0 +1,78 @@
+import cv2
+import numpy as np
+import os
+import pickle
+
+def extract_rooms_info(ch_instance, ch_roomtype):
+    room_ids = np.unique(ch_instance)
+    room_ids = room_ids[room_ids != 0]
+    rooms_info = []
+    for rid in room_ids:
+        mask = (ch_instance == rid)
+        coords = np.column_stack(np.where(mask))
+        if coords.size == 0:
+            continue
+        centroid = coords.mean(axis=0).astype(int)
+        room_type_vals = ch_roomtype[mask]
+        if room_type_vals.size == 0:
+            continue
+        room_type_val = np.bincount(room_type_vals.flatten()).argmax()
+        rooms_info.append({
+            'pos': [int(centroid[0]), int(centroid[1])],
+            'category': int(room_type_val),
+            'pixels': int(mask.sum())
+        })
+    return rooms_info, room_ids
+
+def build_connects(room_ids, ch_instance):
+    adjacency = {rid: set() for rid in room_ids}
+    kernel = np.ones((10, 10), np.uint8)
+    masks = {}
+    for rid in room_ids:
+        mask = (ch_instance == rid).astype(np.uint8)
+        masks[rid] = cv2.dilate(mask, kernel, iterations=1)
+    for i, rid1 in enumerate(room_ids):
+        for rid2 in room_ids[i+1:]:
+            if np.any(masks[rid1] & masks[rid2]):
+                adjacency[rid1].add(rid2)
+                adjacency[rid2].add(rid1)
+    connects = []
+    for rid, neighbors in adjacency.items():
+        for nbr in neighbors:
+            if rid < nbr:
+                connects.append([np.where(room_ids == rid)[0][0], np.where(room_ids == nbr)[0][0]])
+    return connects
+
+def process_image(img_path, output_dir):
+    img = cv2.imread(img_path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        print(f"Image not found: {img_path}")
+        return
+
+    ch_instance = img[:,:,0]
+    ch_roomtype = img[:,:,1]
+    img_name = os.path.splitext(os.path.basename(img_path))[0]
+
+    rooms_info, room_ids = extract_rooms_info(ch_instance, ch_roomtype)
+    connects = build_connects(room_ids, ch_instance)
+
+    # Placeholder for other required fields
+    wall_graph = boundary_graph = inter_graph = door_info = room_circles = allG_iteration = new_window_mask = None
+
+    # Save as pickle
+    data = [
+        wall_graph, boundary_graph, inter_graph, door_info, room_circles,
+        rooms_info, connects, allG_iteration, new_window_mask
+    ]
+    os.makedirs(output_dir, exist_ok=True)
+    out_pkl = os.path.join(output_dir, f"{img_name}.pkl")
+    with open(out_pkl, 'wb') as f:
+        pickle.dump(data, f)
+    print(f"Saved dataset pickle: {out_pkl}")
+
+if __name__ == "__main__":
+    input_dir = "./"  # Change as needed
+    output_dir = "./dataset_out"
+    for fname in os.listdir(input_dir):
+        if fname.endswith(".png"):
+            process_image(os.path.join(input_dir, fname), output_dir)
